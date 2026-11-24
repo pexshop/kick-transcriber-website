@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#10131b">
+<title>KickTranscriber — 直播语音转录</title>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+<style>
+:root{color-scheme:dark;--bg:#0b0e14;--panel:#141a24;--line:#283244;--muted:#9aa8bb;--accent:#53e0a1}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#182335 0,#0b0e14 58%);color:#eef4fc;font:16px/1.55 system-ui,-apple-system,sans-serif;min-height:100vh}
+main{width:min(900px,92%);margin:54px auto}.brand{font-size:13px;letter-spacing:.18em;color:var(--accent);font-weight:800}.hero{margin:18px 0 28px}.hero h1{font-size:clamp(32px,7vw,52px);line-height:1.08;margin:0 0 14px}.hero p{color:var(--muted);max-width:680px}.panel{background:#141a24ee;border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:0 20px 70px #0005}
+label{display:block;font-weight:650;margin:14px 0 8px}input,select{width:100%;background:#0d121b;border:1px solid #354257;border-radius:10px;padding:13px;color:#fff;font:inherit}input[type=file]{padding:10px}.hint,.status{color:var(--muted);font-size:13px}.primary{margin-top:18px;width:100%;padding:14px;border:0;border-radius:11px;background:var(--accent);color:#062317;font-weight:800;font-size:16px;cursor:pointer}.primary:disabled{opacity:.5}.status{margin-top:14px;min-height:24px}.result{margin-top:24px;display:none}.result pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0b1018;border:1px solid var(--line);padding:15px;border-radius:12px;max-height:420px;overflow:auto}.actions{display:flex;gap:10px;flex-wrap:wrap}.actions button{background:#263347;color:white;border:1px solid #40516b;border-radius:9px;padding:9px 13px;cursor:pointer}footer{color:#718096;font-size:12px;margin:20px 4px}.turnstile{margin-top:16px}
+</style></head>
+<body><main>
+<div class="brand">KICKTRANSCRIBER</div>
+<section class="hero"><h1>把直播语音，变成文字。</h1><p>上传直播音频，生成带时间戳的原文、中文翻译和内容摘要。无需 ChatGPT 插件、MCP 或 OAuth。</p></section>
+<section class="panel">
+<form id="form">
+<label for="audio">选择音频文件</label><input id="audio" type="file" accept="audio/*,video/mp4,video/webm" required>
+<p class="hint">单文件上限 24 MB。Kick 回放链接自动提取暂未实现；请先上传音频文件。</p>
+<label for="language">原始语言（可选）</label><input id="language" placeholder="例如 en；留空自动识别">
+<label for="target">翻译语言</label><select id="target"><option value="zh">简体中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option></select>
+<div class="turnstile" id="captcha"></div>
+<button class="primary" id="submit" type="submit">开始转录</button><div class="status" id="status" role="status"></div>
+</form>
+<div class="result" id="result"><h2>转录结果</h2>
+<div class="actions"><button id="copyAll" type="button">复制全部</button><button id="download" type="button">下载 TXT</button></div>
+<h3>原文</h3><pre id="transcript"></pre><h3>翻译</h3><pre id="translation"></pre><h3>摘要</h3><pre id="summary"></pre><h3>时间戳</h3><pre id="segments"></pre>
+</div></section>
+<footer>上传内容会发送到配置的 OpenAI 语音识别服务。请只处理你有权使用的录音。</footer>
+</main>
+<script>
+const TURNSTILE_SITE_KEY = "REPLACE_WITH_CLOUDFLARE_TURNSTILE_SITE_KEY";
+const form=document.querySelector("#form"),statusEl=document.querySelector("#status"),submit=document.querySelector("#submit");
+let resultText="";
+if(TURNSTILE_SITE_KEY.startsWith("REPLACE_")) {
+  document.querySelector("#captcha").textContent="网站管理员尚未配置 Turnstile Site Key。";
+} else {
+  const widget=document.createElement("div");widget.className="cf-turnstile";widget.dataset.sitekey=TURNSTILE_SITE_KEY;document.querySelector("#captcha").append(widget);
+}
+form.addEventListener("submit",async e=>{
+ e.preventDefault();const file=document.querySelector("#audio").files[0];if(!file)return;
+ if(file.size>24*1024*1024){statusEl.textContent="文件超过 24 MB，请先压缩或分段。";return;}
+ const captcha=document.querySelector('[name="cf-turnstile-response"]')?.value;
+ if(!captcha){statusEl.textContent="请先完成安全验证。";return;}
+ submit.disabled=true;statusEl.textContent="正在上传并转录，请稍候…";document.querySelector("#result").style.display="none";
+ const data=new FormData();data.append("file",file);data.append("language",document.querySelector("#language").value);data.append("translate_to",document.querySelector("#target").value);data.append("cf-turnstile-response",captcha);
+ try{
+  const response=await fetch("/transcribe",{method:"POST",body:data});const body=await response.json();if(!response.ok)throw new Error(body.error||"转录失败");
+  document.querySelector("#transcript").textContent=body.transcript||"";document.querySelector("#translation").textContent=body.translation||"暂无翻译";document.querySelector("#summary").textContent=body.summary||"暂无摘要";
+  document.querySelector("#segments").textContent=(body.segments||[]).map(s=>"["+s.start+" - "+s.end+"] "+s.text).join("\n");
+  resultText="原文\n"+(body.transcript||"")+"\n\n翻译\n"+(body.translation||"")+"\n\n摘要\n"+(body.summary||"")+"\n\n时间戳\n"+document.querySelector("#segments").textContent;
+  document.querySelector("#result").style.display="block";statusEl.textContent="转录完成。";
+ }catch(err){statusEl.textContent="处理失败："+err.message;}finally{submit.disabled=false;if(window.turnstile)turnstile.reset();}
+});
+document.querySelector("#copyAll").onclick=async()=>{await navigator.clipboard.writeText(resultText);statusEl.textContent="已复制结果。"};
+document.querySelector("#download").onclick=()=>{const a=document.createElement("a");const u=URL.createObjectURL(new Blob([resultText],{type:"text/plain;charset=utf-8"}));a.href=u;a.download="kick-transcript.txt";a.click();URL.revokeObjectURL(u);};
+</script></body></html>
